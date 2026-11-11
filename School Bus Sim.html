@@ -1,0 +1,430 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>North Liberty School Bus Simulator</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:12px;background:#18232c;color:#f3f5f7;font-family:Arial,sans-serif}
+#game{max-width:1100px;margin:auto;height:calc(100vh - 24px);min-height:540px;display:flex;flex-direction:column;gap:7px}
+header{display:flex;justify-content:space-between;align-items:center}
+h2{font-size:19px;margin:0}
+.small{font-size:11px;color:#aab7c1}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.panel{background:#263641;border:1px solid #41515c;border-radius:9px;padding:8px;min-width:0}
+.stat{font-size:11px;color:#aab7c1}.value{font-weight:bold;font-size:17px}
+#screen{flex:1;min-height:180px;position:relative;overflow:hidden;border-radius:9px;background:#8caebe}
+canvas{width:100%;height:100%;display:block}
+#gpsbox{position:absolute;top:9px;left:9px;background:#10212bdd;padding:9px;border-radius:8px;max-width:75%}
+#turn{font-weight:bold;font-size:14px}
+#road{font-size:11px;color:#d5e0e7;margin-top:3px}
+#keys{position:absolute;right:8px;bottom:8px;background:#10212bdd;padding:7px;border-radius:7px;font-size:11px}
+.bottom{display:grid;grid-template-columns:1fr 1fr 1.5fr;gap:7px}
+button{background:#344b5a;color:white;border:1px solid #627582;border-radius:6px;padding:6px;font-size:11px;font-weight:bold;cursor:pointer}
+button:hover{background:#496579}
+.primary{background:#1679b8}
+.actions{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+input{width:100%;accent-color:#46b6ed}
+.status{font-size:10px;color:#bdcbd4;margin-top:5px;min-height:13px}
+footer{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:#aab7c1}
+@media(max-width:650px){
+ body{padding:6px}#game{height:calc(100vh - 12px);gap:5px}
+ .bottom{grid-template-columns:1fr 1fr}
+ .bottom .career{grid-column:1/-1}
+ .panel{padding:6px}h2{font-size:15px}
+ #keys{font-size:9px}
+}
+</style>
+</head>
+<body>
+<div id="game">
+<header>
+ <div><h2>🚌 North Liberty School Bus Simulator</h2><div class="small">Driver cockpit · North Liberty, Iowa</div></div>
+ <div style="text-align:right"><b id="cash">$250</b><div class="small" id="clock">7:00 AM</div></div>
+</header>
+
+<div class="stats">
+ <div class="panel"><div class="stat">SPEED</div><div class="value" id="speed">0 MPH</div></div>
+ <div class="panel"><div class="stat">FUEL</div><div class="value" id="fuel">78 L</div></div>
+ <div class="panel"><div class="stat">DAMAGE</div><div class="value" id="damage">0%</div></div>
+ <div class="panel"><div class="stat">CABIN TEMP</div><div class="value" id="tempout">68°F</div></div>
+</div>
+
+<div id="screen">
+ <canvas id="scene" width="960" height="520"></canvas>
+ <div id="gpsbox"><div id="turn">GPS: Continue straight</div><div id="road">Loading directions...</div></div>
+ <div id="keys">E accelerate · ← → steer · ↓ brake · ↑ straighten</div>
+</div>
+
+<div class="bottom">
+ <section class="panel">
+  <b>🌡️ Climate</b>
+  <div class="small" style="margin-top:5px">Temperature: <b id="temp">68°F</b></div>
+  <input id="slider" type="range" min="50" max="85" value="68">
+  <div class="status" id="climate">Comfortable cabin</div>
+ </section>
+
+ <section class="panel">
+  <b>📢 Announcements</b>
+  <div class="actions">
+   <button id="winter">❄️ Winter</button>
+   <button id="summer">☀️ Summer</button>
+   <button id="welcome">👋 Welcome</button>
+  </div>
+  <div class="status" id="voice">Browser voice</div>
+ </section>
+
+ <section class="panel career">
+  <b>Career & Bus Maintenance</b>
+  <div class="actions">
+   <button class="primary" id="start">▶ Engine</button>
+   <button id="gas">⛽ Gas stop</button>
+   <button id="refuel">Refuel</button>
+   <button id="repair">🔧 Repair</button>
+   <button id="can">Buy can $45</button>
+   <button id="use">Use can</button>
+   <button id="save">💾 Save</button>
+  </div>
+  <div class="status" id="status">Ready. Press E to drive.</div>
+ </section>
+</div>
+
+<footer>
+ <span>Destination: North Central Middle School</span>
+ <span id="gpsstatus">GPS connecting...</span>
+</footer>
+</div>
+
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+const canvas=$('scene'),ctx=canvas.getContext('2d');
+
+const S={
+ cash:250,fuel:78,damage:0,cans:0,temp:68,
+ minute:420,speed:0,steer:0,started:false,gas:false,windows:false
+};
+
+let keys={},steps=[],last=0;
+
+function message(t){$('status').textContent=t}
+
+function clock(){
+ const h=Math.floor(S.minute/60),m=Math.floor(S.minute%60);
+ return `${h%12||12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`;
+}
+
+function update(){
+ $('cash').textContent='$'+S.cash;
+ $('clock').textContent=clock();
+ $('speed').textContent=Math.round(S.speed)+' MPH';
+ $('fuel').textContent=Math.round(S.fuel)+' L';
+ $('damage').textContent=S.damage+'%';
+ $('temp').textContent=S.temp+'°F';
+ $('tempout').textContent=S.temp+'°F';
+ $('slider').value=S.temp;
+ $('climate').textContent=S.temp<65?'Too cold — raise heat':
+ S.temp>77?'Too warm — lower temperature':'Comfortable cabin';
+ $('turn').textContent=steps[0]?.instruction||'GPS: Continue straight';
+ $('road').textContent=steps[0]?.street||'Route to North Central';
+}
+
+function draw(){
+ const w=canvas.width,h=canvas.height;
+ ctx.clearRect(0,0,w,h);
+
+ const sky=ctx.createLinearGradient(0,0,0,300);
+ sky.addColorStop(0,'#6594b5');
+ sky.addColorStop(1,'#e4edf0');
+ ctx.fillStyle=sky;
+ ctx.fillRect(0,0,w,h);
+
+ ctx.fillStyle='#829a87';
+ ctx.fillRect(0,260,w,100);
+
+ // Neighborhood buildings
+ for(let i=0;i<9;i++){
+  let xx=i*125-20,yy=230+(i%3)*12;
+  ctx.fillStyle=['#a99f92','#b3a99b','#8fa4a8'][i%3];
+  ctx.fillRect(xx,yy,75,65);
+  ctx.fillStyle='#75675d';
+  ctx.beginPath();
+  ctx.moveTo(xx-8,yy);
+  ctx.lineTo(xx+36,yy-30);
+  ctx.lineTo(xx+83,yy);
+  ctx.fill();
+  ctx.fillStyle='#d9e7ec';
+  ctx.fillRect(xx+12,yy+15,15,18);
+  ctx.fillRect(xx+48,yy+15,15,18);
+ }
+
+ // Perspective road
+ const mid=w/2+S.steer*65;
+ ctx.fillStyle='#454e55';
+ ctx.beginPath();
+ ctx.moveTo(mid-65,260);
+ ctx.lineTo(mid+65,260);
+ ctx.lineTo(w+180,h);
+ ctx.lineTo(-180,h);
+ ctx.fill();
+
+ ctx.strokeStyle='#f2e9c9';
+ ctx.lineWidth=4;
+ ctx.beginPath();
+ ctx.moveTo(mid-63,265);
+ ctx.lineTo(-70,h);
+ ctx.moveTo(mid+63,265);
+ ctx.lineTo(w+70,h);
+ ctx.stroke();
+
+ // Trees
+ for(let i=0;i<6;i++){
+  let yy=275+i*38,sc=(yy-250)/260;
+  for(let side of [-1,1]){
+   let xx=mid+side*(85+sc*390);
+   ctx.fillStyle='#554738';
+   ctx.fillRect(xx-3,yy-22*sc,6,35*sc);
+   ctx.fillStyle='#dce7dc';
+   ctx.beginPath();
+   ctx.arc(xx,yy-27*sc,14*sc+4,0,Math.PI*2);
+   ctx.fill();
+  }
+ }
+
+ // Driver dashboard
+ ctx.fillStyle='#1b2931';
+ ctx.beginPath();
+ ctx.moveTo(0,440);
+ ctx.quadraticCurveTo(w/2,390,w,440);
+ ctx.lineTo(w,h);
+ ctx.lineTo(0,h);
+ ctx.fill();
+
+ // Steering wheel
+ ctx.save();
+ ctx.translate(480,490);
+ ctx.rotate(S.steer*.35);
+ ctx.strokeStyle='#10191e';
+ ctx.lineWidth=17;
+ ctx.beginPath();
+ ctx.arc(0,0,47,0,Math.PI*2);
+ ctx.stroke();
+ ctx.strokeStyle='#819098';
+ ctx.lineWidth=7;
+ ctx.beginPath();
+ ctx.moveTo(-40,0);
+ ctx.lineTo(40,0);
+ ctx.moveTo(0,0);
+ ctx.lineTo(0,38);
+ ctx.stroke();
+ ctx.restore();
+
+ ctx.fillStyle='#bde7c4';
+ ctx.font='bold 15px monospace';
+ ctx.fillText('BUS '+Math.round(S.speed)+' MPH',20,490);
+}
+
+function announce(text){
+ if(!window.speechSynthesis){
+  $('voice').textContent='Voice unavailable';
+  return;
+ }
+ try{
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text);
+  u.rate=.94;
+  speechSynthesis.speak(u);
+  $('voice').textContent='Announcement playing';
+ }catch(e){
+  $('voice').textContent='Voice error';
+ }
+}
+
+function save(){
+ try{
+  localStorage.setItem('north_liberty_bus_save',JSON.stringify(S));
+  message('Game saved on this device.');
+ }catch(e){
+  message('Saving is unavailable in this browser.');
+ }
+}
+
+try{
+ const saved=JSON.parse(localStorage.getItem('north_liberty_bus_save')||'null');
+ if(saved)Object.assign(S,saved);
+}catch(e){}
+
+window.addEventListener('keydown',e=>{
+ if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyE'].includes(e.code)){
+  e.preventDefault();
+  keys[e.code]=true;
+ }
+});
+
+window.addEventListener('keyup',e=>keys[e.code]=false);
+window.addEventListener('blur',()=>keys={});
+
+function loop(t){
+ const dt=Math.min((t-(last||t))/1000,.05);
+ last=t;
+
+ if(S.started){
+  if(keys.KeyE&&S.fuel>0&&S.damage<100)
+   S.speed=Math.min(48,S.speed+9*dt);
+  else S.speed=Math.max(0,S.speed-6*dt);
+
+  if(keys.ArrowDown)
+   S.speed=Math.max(0,S.speed-30*dt);
+
+  if(keys.ArrowLeft)
+   S.steer=Math.max(-1,S.steer-2*dt);
+
+  if(keys.ArrowRight)
+   S.steer=Math.min(1,S.steer+2*dt);
+
+  if(keys.ArrowUp)
+   S.steer*=Math.max(0,1-3*dt);
+
+  if(S.speed>0){
+   S.minute+=dt*.7;
+   S.fuel=Math.max(0,S.fuel-dt*S.speed/140);
+  }
+
+  if(Math.abs(S.steer)>.98&&S.speed>24){
+   S.damage=Math.min(100,S.damage+12);
+   S.speed=0;
+   S.minute+=3;
+   S.steer=0;
+   message('Collision! Stop and repair your bus.');
+  }
+ }
+
+ draw();
+ update();
+ requestAnimationFrame(loop);
+}
+
+$('start').onclick=()=>{
+ if(S.damage>=100){message('Bus needs repairs before driving.');return}
+ S.started=true;
+ message('Engine running — hold E to accelerate.');
+ update();
+};
+
+$('slider').oninput=e=>{
+ S.temp=Number(e.target.value);
+ update();
+};
+
+$('winter').onclick=()=>{
+ S.windows=true;
+ announce('Good morning students. Please close your windows and keep the bus warm.');
+ message('Winter announcement made. Windows closed.');
+};
+
+$('summer').onclick=()=>{
+ S.windows=false;
+ announce('Good morning students. Please open your windows for fresh air.');
+ message('Summer announcement made. Windows open.');
+};
+
+$('welcome').onclick=()=>{
+ announce('Good morning everyone. Welcome aboard. Please remain seated.');
+};
+
+$('gas').onclick=()=>{
+ S.started=false;
+ S.speed=0;
+ S.gas=true;
+ message('At Hy-Vee Gas, Coralville. Refuel here.');
+ update();
+};
+
+$('refuel').onclick=()=>{
+ if(!S.gas){message('Stop at the gas station first.');return}
+ const amount=Math.min(40,100-S.fuel);
+ const cost=Math.ceil(amount*1.4);
+ if(!amount){message('Tank is full.');return}
+ if(S.cash<cost){message('Not enough money.');return}
+ S.cash-=cost;
+ S.fuel+=amount;
+ S.gas=false;
+ message('Refueled '+amount+' L for $'+cost);
+ update();
+};
+
+$('repair').onclick=()=>{
+ const cost=Math.ceil(S.damage*1.5);
+ if(!S.damage){message('No repairs needed.');return}
+ if(S.cash<cost){message('Repair cost: $'+cost);return}
+ S.cash-=cost;
+ S.damage=0;
+ message('Bus repaired.');
+ update();
+};
+
+$('can').onclick=()=>{
+ if(S.cash<45){message('Not enough money.');return}
+ S.cash-=45;
+ S.cans++;
+ message('Gas canister purchased.');
+ update();
+};
+
+$('use').onclick=()=>{
+ if(!S.cans||S.fuel>=100){
+  message('No canister available or tank full.');
+  return;
+ }
+ const amount=Math.min(20,100-S.fuel);
+ S.cans--;
+ S.fuel+=amount;
+ message(amount+' L added.');
+ update();
+};
+
+$('save').onclick=save;
+
+// Live road directions
+async function getRoute(){
+ try{
+  const geo=async q=>{
+   const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q));
+   if(!r.ok)throw Error('Geocoding unavailable');
+   const d=await r.json();
+   if(!d.length)throw Error('Location not found');
+   return [+d[0].lon,+d[0].lat];
+  };
+
+  const a=await geo('Hy-Vee Gas, 3285 Crosspark Road, Coralville, Iowa');
+  const b=await geo('North Central Middle School, 180 E Forevergreen Road, North Liberty, Iowa');
+
+  const url='https://router.project-osrm.org/route/v1/driving/'+a.join(',')+';'+b.join(',')+'?steps=true&overview=false';
+  const r=await fetch(url);
+  if(!r.ok)throw Error('Routing unavailable');
+
+  const data=await r.json();
+  if(data.code!=='Ok')throw Error('No route');
+
+  steps=data.routes[0].legs.flatMap(l=>l.steps).map(s=>({
+   instruction:(s.maneuver.type==='turn'?'Turn ':'Continue ')+(s.maneuver.modifier||'straight'),
+   street:s.name||'Local road'
+  }));
+
+  $('gpsstatus').textContent='GPS directions loaded';
+ }catch(e){
+  steps=[{instruction:'Continue straight',street:'GPS unavailable — local drive'}];
+  $('gpsstatus').textContent='GPS offline · cockpit available';
+ }
+ update();
+}
+
+getRoute();
+update();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
